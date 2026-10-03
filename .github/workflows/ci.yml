@@ -12,34 +12,6 @@ env:
   RUST_CACHE_VERSION: v1
 
 jobs:
-  release_linux:
-    continue-on-error: false
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - ghimage: ubuntu-24.04
-
-    permissions:
-      contents: write
-
-    runs-on: ${{ matrix.ghimage }}
-
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          submodules: true
-
-      - uses: Swatinem/rust-cache@v2.9.2
-        with:
-          prefix-key: ${{ env.RUST_CACHE_VERSION }}-rust
-
-      - name: Build
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          cargo build --release
-
   clippy_and_test:
     continue-on-error: false
     strategy:
