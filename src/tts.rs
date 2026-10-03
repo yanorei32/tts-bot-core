@@ -1,10 +1,26 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use derivative::Derivative;
-use tokio::sync::RwLock;
 use indexmap::IndexMap;
+use tokio::sync::RwLock;
+
+use crate::android_tts::AndroidTTS;
+use crate::bing_speech::BingSpeech;
+use crate::capcutttswrapper::CapCutTTSWrapper;
+use crate::coefont_try::CoefontTry;
+use crate::google_translate::GoogleTranslate;
+use crate::ktts::KTTS;
+use crate::mirae_tts::MiraeTTS;
+use crate::model::TtsServiceConfig;
+use crate::naver::Naver;
+use crate::omnivoice::OmniVoice;
+use crate::sayserver::SayServer;
+use crate::voiceroid::Voiceroid;
+use crate::voicevox::Voicevox;
+use crate::volcengine::Volcengine;
+use crate::winrttts::WinRTTTS;
 
 #[derive(Clone, Debug)]
 pub struct StyleView {
@@ -20,7 +36,11 @@ pub struct CharacterView {
     pub styles: Vec<StyleView>,
 }
 
-pub static EMPTY_WAVE: [u8; 44] = [0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x44, 0xac, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, 0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00];
+pub static EMPTY_WAVE: [u8; 44] = [
+    0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20,
+    0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x44, 0xac, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00,
+    0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00,
+];
 
 pub fn split_long_text(text: &str, max_length: usize) -> Vec<String> {
     // Regex for whitespace including Zero Width No-Break Space and No-Break Space
@@ -260,6 +280,126 @@ impl TtsServices {
         let styles = service.styles().await?;
 
         services.insert(service_id.to_owned(), (service, styles));
+
+        Ok(())
+    }
+
+    pub async fn initialize_by_config(
+        &self,
+        map: &IndexMap<String, TtsServiceConfig>,
+    ) -> Result<()> {
+        for (service_id, service) in map {
+            match service {
+                TtsServiceConfig::Voiceroid(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(Voiceroid::new(config).await.with_context(|| {
+                            format!("Failed to initialize VOICEROID backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::Voicevox(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(Voicevox::new(config).with_context(|| {
+                            format!("Failed to initialize VOICEVOX backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::KTTS(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(KTTS::new(config).with_context(|| {
+                            format!("Failed to initialize KTTS backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+
+                TtsServiceConfig::MiraeTTS(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(MiraeTTS::new(config).with_context(|| {
+                            format!("Failed to initialize MiraeTTS backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::WinRTTTS(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(WinRTTTS::new(config).await.with_context(|| {
+                            format!("Failed to initialize WinRTTTS backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::GoogleTranslate(config) => {
+                    self.register(service_id, Box::new(GoogleTranslate::new(config)))
+                        .await
+                }
+                TtsServiceConfig::Naver(config) => {
+                    self.register(service_id, Box::new(Naver::new(config)))
+                        .await
+                }
+                TtsServiceConfig::BingSpeech(config) => {
+                    self.register(service_id, Box::new(BingSpeech::new(config)))
+                        .await
+                }
+                TtsServiceConfig::CoefontTry(config) => {
+                    self.register(service_id, Box::new(CoefontTry::new(config)))
+                        .await
+                }
+                TtsServiceConfig::AndroidTTS(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(AndroidTTS::new(config).with_context(|| {
+                            format!("Failed to initialize AndroidTTS backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::OmniVoice(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(OmniVoice::new(config).await.with_context(|| {
+                            format!("Failed to initialize OmniVoice backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::CapCutTTSWrapper(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(CapCutTTSWrapper::new(config).with_context(|| {
+                            format!("Failed to initialize CapCutTTSWrapper backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::SayServer(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(SayServer::new(config).await.with_context(|| {
+                            format!("Failed to initialize SayServer backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+                TtsServiceConfig::Volcengine(config) => {
+                    self.register(
+                        service_id,
+                        Box::new(Volcengine::new(config).with_context(|| {
+                            format!("Failed to initialize Volcengine backend ({service_id})")
+                        })?),
+                    )
+                    .await
+                }
+            }
+            .with_context(|| format!("Failed to register service {service_id}"))?;
+        }
 
         Ok(())
     }

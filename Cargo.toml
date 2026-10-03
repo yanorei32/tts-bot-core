@@ -1,6 +1,6 @@
 [package]
 name = "tts-bot-core"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 
 [dependencies]
@@ -24,7 +24,7 @@ symphonia = { version = "0.6", features = ["mp3", "pcm"], default-features = fal
 tap = "1"
 tokio = { version = "1", features = ["sync"] }
 tokio-tungstenite = "0.30"
-toml = "1"
+toml = { version = "1", features = ["preserve_order"] }
 tracing = "0.1"
 tungstenite = "0.30"
 url = { version = "2", features = ["serde"] }

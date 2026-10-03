@@ -13,6 +13,6 @@ pub mod voicevox;
 pub mod volcengine;
 pub mod winrttts;
 
+pub mod model;
 pub mod timestretch;
 pub mod tts;
-pub mod model;

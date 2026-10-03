@@ -24,6 +24,10 @@ fn default_headers() -> HashMap<String, String> {
     HashMap::new()
 }
 
+fn default_is_gynoid_talk() -> bool {
+    false
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct Setting {
     pub url: reqwest::Url,
@@ -33,6 +37,8 @@ pub struct Setting {
     pub master_volume: f64,
     #[serde(default = "default_character_volume")]
     pub character_volume: HashMap<String, f64>,
+    #[serde(default = "default_is_gynoid_talk")]
+    pub is_gynoid_talk: bool,
 }
 
 #[derive(Debug)]
@@ -42,6 +48,7 @@ struct VoiceroidInner {
     voices: Vec<api::Voice>,
     master_volume: f64,
     character_volume: HashMap<String, f64>,
+    is_gynoid_talk: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +94,7 @@ impl Voiceroid {
                 character_volume: setting.character_volume.clone(),
                 voices,
                 client,
+                is_gynoid_talk: setting.is_gynoid_talk,
             }),
         })
     }
@@ -177,9 +185,15 @@ impl TtsService for Voiceroid {
                     icon: icon.clone(),
                 };
 
+                let policy = if self.inner.is_gynoid_talk {
+                    "GynoidTalk利用規約に則り、ご利用ください。".to_string()
+                } else {
+                    "VOICEROID利用規約に則り、ご利用ください。".to_string()
+                };
+
                 CharacterView {
                     name: voice.name.clone(),
-                    policy: "VOICEROID利用規約に則り、ご利用ください。".to_string(),
+                    policy,
                     styles: vec![normal, alt],
                 }
             })
