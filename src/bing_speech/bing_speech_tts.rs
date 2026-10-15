@@ -141,12 +141,36 @@ fn create_empty_wav() -> Result<Vec<u8>> {
     Ok(wav_cursor.into_inner())
 }
 
+fn combine_audio_parts(results: Vec<Result<Vec<u8>>>) -> Result<Vec<u8>> {
+    let total_parts = results.len();
+    anyhow::ensure!(total_parts > 0, "bing speech: no audio parts received");
+
+    let mut combined_audio = Vec::new();
+    for (index, result) in results.into_iter().enumerate() {
+        let part_number = index + 1;
+        let audio = result.with_context(|| {
+            format!("bing speech: synthesis failed for chunk {part_number}/{total_parts}")
+        })?;
+        anyhow::ensure!(
+            !audio.is_empty(),
+            "bing speech: no audio received for chunk {part_number}/{total_parts}"
+        );
+        combined_audio.extend(audio);
+    }
+
+    Ok(combined_audio)
+}
+
 pub async fn get_audio_bytes(
     text: &str,
     voice: &str,
     locale: &str,
     volume: f32,
 ) -> Result<Vec<u8>> {
+    if text.trim().is_empty() {
+        return create_empty_wav().context("bing speech: failed to build the empty wav");
+    }
+
     let started = Instant::now();
     let parts = crate::tts::split_long_text(text, BING_SPEECH_MAX_CHARS);
 
@@ -198,30 +222,10 @@ pub async fn get_audio_bytes(
         .collect();
 
     let results = futures::future::join_all(futures).await;
-
-    let mut combined_audio = Vec::new();
-    let mut failed_parts = 0;
-    for result in results {
-        match result {
-            Ok(audio) => combined_audio.extend(audio),
-            Err(_) => failed_parts += 1,
-        }
-    }
+    let combined_audio = combine_audio_parts(results)?;
 
     let mp3_bytes = combined_audio.len();
-    if mp3_bytes == 0 {
-        warn!(
-            failed_parts,
-            elapsed_ms = started.elapsed().as_millis(),
-            "bing speech: no audio received, falling back to an empty wav"
-        );
-        return create_empty_wav().context("bing speech: failed to build the empty wav");
-    }
-
-    debug!(
-        failed_parts,
-        mp3_bytes, "bing speech: converting mp3 to wav"
-    );
+    debug!(mp3_bytes, "bing speech: converting mp3 to wav");
 
     let wav = crate::tts::convert_mp3_to_wav(combined_audio, volume)
         .context("bing speech: failed to convert the mp3 stream to wav")?;
@@ -412,4 +416,100 @@ async fn fetch_audio_part(part: String, voice: String, locale: String) -> Result
     }
 
     Ok(audio_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_combine_audio_parts_preserves_order() {
+        let audio = combine_audio_parts(vec![Ok(vec![1, 2]), Ok(vec![3]), Ok(vec![4, 5])]).unwrap();
+
+        assert_eq!(audio, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_combine_audio_parts_rejects_failed_first_chunk() {
+        let error = combine_audio_parts(vec![
+            Err(anyhow::anyhow!("HTTP 403")),
+            Ok(vec![2]),
+            Ok(vec![3]),
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("chunk 1/3"));
+        assert_eq!(error.root_cause().to_string(), "HTTP 403");
+    }
+
+    #[test]
+    fn test_combine_audio_parts_rejects_failed_middle_chunk_and_preserves_error_chain() {
+        let source = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "connection refused",
+        ))
+        .context("websocket handshake failed");
+        let error = combine_audio_parts(vec![Ok(vec![1]), Err(source), Ok(vec![3])]).unwrap_err();
+
+        assert_eq!(
+            error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![
+                "bing speech: synthesis failed for chunk 2/3",
+                "websocket handshake failed",
+                "connection refused",
+            ]
+        );
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::ConnectionRefused
+        );
+    }
+
+    #[test]
+    fn test_combine_audio_parts_rejects_all_failed_chunks() {
+        let error = combine_audio_parts(vec![
+            Err(anyhow::anyhow!("first chunk failed")),
+            Err(anyhow::anyhow!("second chunk failed")),
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("chunk 1/2"));
+        assert_eq!(error.root_cause().to_string(), "first chunk failed");
+    }
+
+    #[test]
+    fn test_combine_audio_parts_rejects_empty_audio() {
+        for index in 0..3 {
+            let mut results = vec![Ok(vec![1]), Ok(vec![2]), Ok(vec![3])];
+            results[index] = Ok(Vec::new());
+            let error = combine_audio_parts(results).unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("chunk {}/3", index + 1))
+            );
+            assert!(error.to_string().contains("no audio received"));
+        }
+    }
+
+    #[test]
+    fn test_combine_audio_parts_rejects_no_parts() {
+        assert!(combine_audio_parts(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn test_get_audio_bytes_returns_empty_wav_for_blank_text() {
+        let expected = create_empty_wav().unwrap();
+        for text in ["", " \t\r\n", "\u{3000}\u{00a0}"] {
+            let wav = futures::executor::block_on(get_audio_bytes(text, "", "", 1.0)).unwrap();
+
+            assert_eq!(wav, expected);
+            let reader = hound::WavReader::new(std::io::Cursor::new(wav)).unwrap();
+            assert_eq!(reader.len(), 0);
+            assert_eq!(reader.spec().channels, 1);
+            assert_eq!(reader.spec().sample_rate, 24000);
+            assert_eq!(reader.spec().bits_per_sample, 16);
+        }
+    }
 }
