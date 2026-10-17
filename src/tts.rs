@@ -13,7 +13,7 @@ use crate::coefont_try::CoefontTry;
 use crate::google_translate::GoogleTranslate;
 use crate::ktts::KTTS;
 use crate::mirae_tts::MiraeTTS;
-use crate::model::TtsServiceConfig;
+use crate::model::{TtsConfig, TtsServiceConfig};
 use crate::naver::Naver;
 use crate::omnivoice::OmniVoice;
 use crate::sayserver::SayServer;
@@ -243,6 +243,7 @@ pub trait TtsService: std::fmt::Debug + Send + Sync {
 struct TtsServicesInner {
     #[allow(clippy::type_complexity)]
     services: RwLock<IndexMap<String, (Box<dyn TtsService>, Vec<CharacterView>)>>,
+    g2p: RwLock<IndexMap<String, crate::g2p::Engine>>,
 }
 
 #[derive(Clone, Debug)]
@@ -255,6 +256,7 @@ impl TtsServices {
         Self {
             inner: Arc::new(TtsServicesInner {
                 services: RwLock::new(IndexMap::new()),
+                g2p: RwLock::new(IndexMap::new()),
             }),
         }
     }
@@ -283,6 +285,19 @@ impl TtsServices {
         services.insert(service_id.to_owned(), (service, styles));
 
         Ok(())
+    }
+
+    pub async fn initialize(&self, config: &TtsConfig) -> Result<()> {
+        let mut g2p = IndexMap::new();
+        for (id, setting) in &config.g2p_engines {
+            g2p.insert(
+                id.clone(),
+                crate::g2p::Engine::new(setting)
+                    .with_context(|| format!("Failed to initialize G2P backend ({id})"))?,
+            );
+        }
+        *self.inner.g2p.write().await = g2p;
+        self.initialize_by_config(&config.tts_services).await
     }
 
     pub async fn initialize_by_config(
@@ -435,5 +450,62 @@ impl TtsServices {
         };
 
         service.tts(style_id, text).await
+    }
+
+    pub async fn g2p_choices(&self, service_id: &str, style_id: &str) -> Vec<(String, String)> {
+        let Some(speaker) = self.speaker_name(service_id, style_id).await else {
+            return Vec::new();
+        };
+        let engines = self.inner.g2p.read().await;
+        crate::g2p::matching(&engines, service_id, &speaker, style_id)
+            .into_iter()
+            .map(|(id, engine)| (id.to_string(), engine.friendly_name.clone()))
+            .collect()
+    }
+
+    pub async fn tts_with_g2p(
+        &self,
+        service_id: &str,
+        style_id: &str,
+        g2p: Option<&str>,
+        text: &str,
+    ) -> Result<Vec<u8>> {
+        let text = self.apply_g2p(service_id, style_id, g2p, text).await?;
+        self.tts(service_id, style_id, &text).await
+    }
+
+    async fn speaker_name(&self, service_id: &str, style_id: &str) -> Option<String> {
+        let services = self.inner.services.read().await;
+        let (_service, styles) = services.get(service_id)?;
+        styles
+            .iter()
+            .find(|character| character.styles.iter().any(|style| style.id == style_id))
+            .map(|character| character.name.clone())
+    }
+
+    async fn apply_g2p(
+        &self,
+        service_id: &str,
+        style_id: &str,
+        g2p: Option<&str>,
+        text: &str,
+    ) -> Result<String> {
+        let Some(id) = g2p else {
+            return Ok(text.to_string());
+        };
+        let engine = {
+            let engines = self.inner.g2p.read().await;
+            engines
+                .get(id)
+                .with_context(|| format!("Unknown G2P engine {id}"))?
+                .clone()
+        };
+        let Some(speaker) = self.speaker_name(service_id, style_id).await else {
+            return Ok(text.to_string());
+        };
+        if !engine.matches(service_id, &speaker, style_id) {
+            return Ok(text.to_string());
+        }
+        engine.convert(text).await
     }
 }
