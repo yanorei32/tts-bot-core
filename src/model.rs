@@ -29,6 +29,8 @@ pub struct TtsConfig {
     pub default_style: TtsStyle,
     pub tts_services: IndexMap<String, TtsServiceConfig>,
     #[serde(default)]
+    pub g2p_engines: IndexMap<String, crate::g2p::Setting>,
+    #[serde(default)]
     pub timestretch: Option<TimeStretchConfig>,
 }
 
@@ -60,4 +62,6 @@ impl TtsConfig {
 pub struct TtsStyle {
     pub service_id: String,
     pub style_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub g2p: Option<String>,
 }

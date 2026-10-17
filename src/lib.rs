@@ -2,6 +2,7 @@ pub mod android_tts;
 pub mod bing_speech;
 pub mod capcutttswrapper;
 pub mod coefont_try;
+pub mod g2p;
 pub mod google_translate;
 pub mod ktts;
 pub mod mirae_tts;
